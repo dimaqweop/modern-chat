@@ -1,0 +1,34 @@
+// convex/schema.ts
+import { authTables } from "@convex-dev/auth/server";
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
+
+export default defineSchema({
+  // Системні таблиці авторизації Convex Auth
+  ...authTables,
+
+  // Користувачі
+  users: defineTable({
+    name: v.optional(v.string()),
+    image: v.optional(v.string()),
+    email: v.optional(v.string()),
+  }).index("by_email", ["email"]),
+
+  // Чат-кімнати
+  chatRooms: defineTable({
+    title: v.string(),
+    description: v.optional(v.string()),
+    creatorId: v.id("users"),
+    lastMessage: v.optional(v.string()),
+    lastMessageAt: v.optional(v.number()),
+  }).index("by_creator", ["creatorId"]),
+
+  // Повідомлення в кімнатах
+  messages: defineTable({
+    chatRoomId: v.id("chatRooms"),
+    senderId: v.id("users"),
+    senderName: v.string(),
+    senderPhoto: v.optional(v.string()),
+    content: v.string(),
+  }).index("by_chat_room", ["chatRoomId"]),
+});
