@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Animated, Text, View } from "react-native";
 
 type Props = {
@@ -6,9 +6,9 @@ type Props = {
 };
 
 export function TypingDots({ typingUsers }: Props) {
-  const dot1 = useRef(new Animated.Value(0)).current;
-  const dot2 = useRef(new Animated.Value(0)).current;
-  const dot3 = useRef(new Animated.Value(0)).current;
+  const [dot1] = useState(() => new Animated.Value(0));
+  const [dot2] = useState(() => new Animated.Value(0));
+  const [dot3] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     const animateDot = (dot: Animated.Value, delay: number) => {
@@ -42,7 +42,7 @@ export function TypingDots({ typingUsers }: Props) {
       anim2.stop();
       anim3.stop();
     };
-  }, []);
+  }, [dot1, dot2, dot3]);
 
   if (typingUsers.length === 0) return null;
 
