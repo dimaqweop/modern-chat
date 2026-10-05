@@ -1,219 +1,395 @@
-// app/chat/[id].tsx
+import { ImageViewerModal } from "@/components/ImageViewerModal";
+import { TypingDots } from "@/components/TypingDots";
 import { COLORS } from "@/constants/theme";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery } from "convex/react";
+import * as FileSystem from "expo-file-system/legacy";
+import * as ImagePicker from "expo-image-picker";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    FlatList,
-    Image,
-    KeyboardAvoidingView,
-    Platform,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-export default function ChatScreen() {
+/**
+ * Завантаження зображення у сховище Convex:
+ * Спочатку пробуємо FileSystem.uploadAsync на нативних платформах,
+ * у разі помилки або на web використовуємо fetch з blob.
+ */
+async function uploadImageToStorage(uploadUrl: string, uri: string): Promise<Id<"_storage">> {
+  if (Platform.OS !== "web") {
+    try {
+      const uploadResult = await FileSystem.uploadAsync(uploadUrl, uri, {
+        httpMethod: "POST",
+        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        headers: {
+          "Content-Type": "image/jpeg",
+        },
+      });
+
+      if (uploadResult.status >= 200 && uploadResult.status < 300) {
+        const parsed = JSON.parse(uploadResult.body);
+        if (parsed.storageId) {
+          return parsed.storageId as Id<"_storage">;
+        }
+      }
+      console.warn("FileSystem.uploadAsync non-2xx or empty storageId:", uploadResult.status, uploadResult.body);
+    } catch (nativeError) {
+      console.warn("FileSystem.uploadAsync failed, falling back to fetch:", nativeError);
+    }
+  }
+
+  // Fallback для Web або якщо нативний метод дав збій
+  const response = await fetch(uri);
+  if (!response.ok) {
+    throw new Error(`Не вдалося прочитати вибране фото (код ${response.status})`);
+  }
+  const blob = await response.blob();
+
+  const uploadResult = await fetch(uploadUrl, {
+    method: "POST",
+    headers: { "Content-Type": blob.type || "image/jpeg" },
+    body: blob,
+  });
+
+  if (!uploadResult.ok) {
+    const errorText = await uploadResult.text();
+    throw new Error(`Помилка завантаження фото (${uploadResult.status}): ${errorText}`);
+  }
+
+  const json = await uploadResult.json();
+  if (!json.storageId) {
+    throw new Error("Не вдалося отримати ID збереженого фото від сервера Convex");
+  }
+
+  return json.storageId as Id<"_storage">;
+}
+
+export default function ChatRoomScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const chatRoomId = id as Id<"chatRooms">;
   const router = useRouter();
-  const insets = useSafeAreaInsets();
-  const flatListRef = useRef<FlatList>(null);
 
-  const roomId = id as Id<"chatRooms">;
-  const room = useQuery(api.rooms.getRoom, { roomId });
-  const messages = useQuery(api.messages.listMessages, { chatRoomId: roomId });
+  // Дані з Convex
+  const room = useQuery(api.rooms.getRoom, { roomId: chatRoomId });
+  const messages = useQuery(api.messages.listMessages, { chatRoomId });
   const currentUser = useQuery(api.users.currentUser);
+  const typingUsers = useQuery(api.typing.getTypingUsers, { chatRoomId });
+
+  // Мутації
   const sendMessage = useMutation(api.messages.sendMessage);
+  const sendMediaMessage = useMutation(api.messages.sendMediaMessage);
+  const generateUploadUrl = useMutation(api.messages.generateUploadUrl);
+  const editMessage = useMutation(api.messages.editMessage);
+  const deleteMessage = useMutation(api.messages.deleteMessage);
+  const setTyping = useMutation(api.typing.setTyping);
 
+  // Локальний стан
   const [inputText, setInputText] = useState("");
-  const [isSending, setIsSending] = useState(false);
+  const [selectedImageUri, setSelectedImageUri] = useState<string | null>(null);
+  const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<Id<"messages"> | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Автоматичне прокручування вниз при нових повідомленнях
-  useEffect(() => {
-    if (messages && messages.length > 0) {
+  const flatListRef = useRef<FlatList>(null);
+  const lastTypingSentRef = useRef(0);
+
+  // Обробка набору тексту з тротлінгом (1.5 с)
+  const handleTextChange = (text: string) => {
+    setInputText(text);
+
+    const now = Date.now();
+    if (now - lastTypingSentRef.current > 1500) {
+      lastTypingSentRef.current = now;
+      setTyping({ chatRoomId }).catch(() => {});
+    }
+  };
+
+  // Вибір фото з медіатеки
+  const pickImage = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets[0].uri) {
+      setSelectedImageUri(result.assets[0].uri);
+    }
+  };
+
+  // Відправка повідомлення або збереження редагування
+  const handleSend = async () => {
+    const text = inputText.trim();
+    if ((!text && !selectedImageUri) || isSubmitting) return;
+
+    try {
+      setIsSubmitting(true);
+
+      if (editingMessageId) {
+        // Режим збереження редагування
+        await editMessage({
+          messageId: editingMessageId,
+          content: text,
+        });
+        setEditingMessageId(null);
+      } else if (selectedImageUri) {
+        // Режим завантаження фото в Convex Storage
+        const uploadUrl = await generateUploadUrl();
+        const storageId = await uploadImageToStorage(uploadUrl, selectedImageUri);
+
+        await sendMediaMessage({
+          chatRoomId,
+          storageId,
+          caption: text || undefined,
+          content: text || undefined,
+        });
+
+        setSelectedImageUri(null);
+      } else {
+        // Звичайна відправка тексту
+        await sendMessage({
+          chatRoomId,
+          content: text,
+        });
+      }
+
+      setInputText("");
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
-    }
-  }, [messages?.length]);
-
-  const handleSend = async () => {
-    if (!inputText.trim() || isSending) return;
-
-    const text = inputText;
-    setInputText("");
-    setIsSending(true);
-
-    try {
-      await sendMessage({
-        chatRoomId: roomId,
-        content: text,
-      });
-    } catch (error) {
-      console.error("Error sending message", error);
-      setInputText(text);
+    } catch (error: any) {
+      console.error("Помилка відправки повідомлення:", error);
+      Alert.alert(
+        "Помилка",
+        error?.message || "Не вдалося надіслати повідомлення"
+      );
     } finally {
-      setIsSending(false);
+      setIsSubmitting(false);
     }
   };
 
-  const formatTime = (timestamp?: number) => {
-    if (!timestamp) return "";
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  };
+  // Меню дій над повідомленням (тільки для власних)
+  const handleMessageLongPress = (item: {
+    _id: Id<"messages">;
+    senderId: Id<"users">;
+    content?: string;
+  }) => {
+    if (item.senderId !== currentUser?._id) return;
 
-  if (!room) {
-    return (
-      <View className="flex-1 bg-surface justify-center items-center">
-        <ActivityIndicator size="large" color={COLORS.primary} />
-      </View>
-    );
-  }
+    const options: any[] = [];
+
+    if (item.content) {
+      options.push({
+        text: "Редагувати",
+        onPress: () => {
+          setEditingMessageId(item._id);
+          setInputText(item.content || "");
+        },
+      });
+    }
+
+    options.push({
+      text: "Видалити",
+      style: "destructive",
+      onPress: () => {
+        Alert.alert("Видалити повідомлення", "Ви впевнені, що хочете видалити повідомлення?", [
+          { text: "Скасувати", style: "cancel" },
+          {
+            text: "Так, видалити",
+            style: "destructive",
+            onPress: () => deleteMessage({ messageId: item._id }),
+          },
+        ]);
+      },
+    });
+
+    options.push({ text: "Скасувати", style: "cancel" });
+
+    Alert.alert("Дії з повідомленням", undefined, options);
+  };
 
   return (
     <KeyboardAvoidingView
+      className="flex-1 bg-surface"
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
-      className="flex-1 bg-surface"
     >
       <Stack.Screen
         options={{
-          title: room.title,
+          title: room?.title ?? "Чат",
           headerRight: () => (
             <TouchableOpacity
-              onPress={() => router.push(`/settings/${roomId}`)}
+              onPress={() => router.push(`/settings/${chatRoomId}`)}
               className="p-1"
             >
-              <Ionicons
-                name="information-circle-outline"
-                size={24}
-                color={COLORS.white}
-              />
+              <Ionicons name="information-circle-outline" size={24} color={COLORS.primary} />
             </TouchableOpacity>
           ),
         }}
       />
 
       {/* Список повідомлень */}
-      {messages === undefined ? (
-        <View className="flex-1 justify-center items-center">
-          <ActivityIndicator size="large" color={COLORS.primary} />
-        </View>
-      ) : (
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          keyExtractor={(item) => item._id}
-          contentContainerStyle={{
-            paddingHorizontal: 16,
-            paddingVertical: 16,
-            gap: 12,
-          }}
-          ListEmptyComponent={
-            <View className="flex-1 items-center justify-center py-20">
-              <Ionicons
-                name="chatbubble-ellipses-outline"
-                size={40}
-                color={COLORS.textMuted}
-              />
-              <Text className="text-textMuted text-sm mt-2 text-center">
-                Повідомлень ще немає. Напишіть першим!
-              </Text>
-            </View>
-          }
-          renderItem={({ item }) => {
-            const isMe = currentUser && item.senderId === currentUser._id;
+      <FlatList
+        ref={flatListRef}
+        data={messages}
+        keyExtractor={(item) => item._id}
+        contentContainerStyle={{ padding: 16, gap: 12 }}
+        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+        renderItem={({ item }) => {
+          const isOwn = item.senderId === currentUser?._id;
 
-            return (
+          return (
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onLongPress={() => handleMessageLongPress(item)}
+              className={`flex-row ${isOwn ? "justify-end" : "justify-start"}`}
+            >
               <View
-                className={`flex-row items-end gap-2 ${
-                  isMe ? "justify-end" : "justify-start"
+                className={`max-w-[80%] rounded-2xl p-3 ${
+                  isOwn ? "bg-primary rounded-br-xs" : "bg-secondary rounded-bl-xs"
                 }`}
               >
-                {!isMe && (
-                  <View className="w-7 h-7 rounded-full bg-secondary border border-surfaceLight items-center justify-center mb-1">
-                    {item.senderPhoto ? (
-                      <Image
-                        source={{ uri: item.senderPhoto }}
-                        className="w-full h-full rounded-full"
-                      />
-                    ) : (
-                      <Text className="text-textMuted text-xs font-bold">
-                        {item.senderName[0]?.toUpperCase() ?? "U"}
-                      </Text>
-                    )}
-                  </View>
+                {!isOwn && (
+                  <Text className="text-textMuted text-xs font-semibold mb-1">
+                    {item.senderName}
+                  </Text>
                 )}
 
-                <View
-                  className={`max-w-[78%] px-4 py-2.5 rounded-2xl ${
-                    isMe
-                      ? "bg-primary rounded-br-none"
-                      : "bg-secondary border border-surfaceLight rounded-bl-none"
-                  }`}
-                >
-                  {!isMe && (
-                    <Text className="text-primary text-xs font-bold mb-1">
-                      {item.senderName}
-                    </Text>
-                  )}
-                  <Text className="text-white text-base leading-5">
-                    {item.content}
-                  </Text>
-                  <Text
-                    className={`text-[10px] text-right mt-1 ${
-                      isMe ? "text-white/70" : "text-textMuted"
-                    }`}
+                {/* Фотографія (якщо надіслана) */}
+                {item.imageUrl && (
+                  <TouchableOpacity
+                    activeOpacity={0.9}
+                    onPress={() => setFullscreenImage(item.imageUrl!)}
                   >
-                    {formatTime(item._creationTime)}
+                    <Image
+                      source={{ uri: item.imageUrl }}
+                      className="w-56 h-56 rounded-xl mb-1 bg-surface"
+                      resizeMode="cover"
+                    />
+                  </TouchableOpacity>
+                )}
+
+                {/* Текст повідомлення */}
+                {item.content ? (
+                  <Text className="text-white text-base leading-5">{item.content}</Text>
+                ) : null}
+
+                {/* Час та позначка (ред.) */}
+                <View className="flex-row items-center justify-end mt-1 gap-1">
+                  {item.isEdited && (
+                    <Text className="text-white/60 text-[10px] italic">(ред.)</Text>
+                  )}
+                  <Text className="text-white/60 text-[10px]">
+                    {new Date(item._creationTime).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
                   </Text>
                 </View>
               </View>
-            );
-          }}
-        />
+            </TouchableOpacity>
+          );
+        }}
+      />
+
+      {/* Індикатор набору тексту іншими користувачами */}
+      {typingUsers && typingUsers.length > 0 && (
+        <TypingDots typingUsers={typingUsers} />
       )}
 
-      {/* Панель введення повідомлення */}
-      <View
-        style={{ paddingBottom: Math.max(insets.bottom, 10) }}
-        className="px-4 py-2 bg-surface border-t border-surfaceLight flex-row items-end gap-2"
-      >
+      {/* Панель активного редагування повідомлення */}
+      {editingMessageId && (
+        <View className="flex-row items-center justify-between px-4 py-2 bg-surfaceLight border-t border-surface">
+          <View className="flex-row items-center flex-1 mr-2">
+            <Ionicons name="pencil" size={16} color={COLORS.primary} style={{ marginRight: 6 }} />
+            <Text className="text-white text-xs font-semibold">Редагування повідомлення</Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => {
+              setEditingMessageId(null);
+              setInputText("");
+            }}
+          >
+            <Ionicons name="close-circle" size={20} color={COLORS.textMuted} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Прев'ю обраної картинки перед відправкою */}
+      {selectedImageUri && (
+        <View className="flex-row items-center px-4 py-2 bg-surfaceLight border-t border-surface">
+          <Image source={{ uri: selectedImageUri }} className="w-12 h-12 rounded-lg mr-3" />
+          <Text className="text-white text-xs flex-1">Фото прикріплено</Text>
+          <TouchableOpacity onPress={() => setSelectedImageUri(null)}>
+            <Ionicons name="close-circle" size={22} color={COLORS.danger} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Панель введення */}
+      <View className="flex-row items-center p-3 bg-surface border-t border-surfaceLight">
+        <TouchableOpacity
+          onPress={pickImage}
+          disabled={isSubmitting}
+          className="mr-2 p-2 rounded-full bg-surfaceLight"
+        >
+          <Ionicons name="image-outline" size={22} color={COLORS.primary} />
+        </TouchableOpacity>
+
         <TextInput
-          className="flex-1 bg-secondary border border-surfaceLight rounded-2xl px-4 py-2.5 text-white text-base max-h-28 min-h-[42px]"
-          placeholder="Повідомлення..."
+          className="flex-1 bg-background text-white px-4 py-2.5 rounded-full text-base border border-surfaceLight mr-2"
+          placeholder={
+            editingMessageId
+              ? "Змініть текст..."
+              : selectedImageUri
+              ? "Додайте підпис до фото..."
+              : "Напишіть повідомлення..."
+          }
           placeholderTextColor={COLORS.textMuted}
           value={inputText}
-          onChangeText={setInputText}
+          onChangeText={handleTextChange}
           multiline
         />
 
         <TouchableOpacity
           onPress={handleSend}
-          disabled={!inputText.trim() || isSending}
-          className={`w-11 h-11 rounded-2xl items-center justify-center ${
-            inputText.trim() && !isSending ? "bg-primary" : "bg-secondary"
+          disabled={(!inputText.trim() && !selectedImageUri) || isSubmitting}
+          className={`w-11 h-11 rounded-full items-center justify-center bg-primary ${
+            (!inputText.trim() && !selectedImageUri) || isSubmitting
+              ? "opacity-50"
+              : "active:opacity-80"
           }`}
-          activeOpacity={0.8}
         >
-          {isSending ? (
+          {isSubmitting ? (
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
             <Ionicons
-              name="send"
-              size={18}
-              color={inputText.trim() ? "#FFFFFF" : COLORS.textMuted}
+              name={editingMessageId ? "checkmark" : "send"}
+              size={20}
+              color="#FFFFFF"
             />
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Модальне вікно для повноекранного перегляду зображення */}
+      <ImageViewerModal
+        visible={!!fullscreenImage}
+        imageUrl={fullscreenImage}
+        onClose={() => setFullscreenImage(null)}
+      />
     </KeyboardAvoidingView>
   );
 }
