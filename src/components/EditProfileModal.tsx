@@ -47,6 +47,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
 
   useEffect(() => {
     if (visible && currentUser) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setName(currentUser.name || "");
       setUsername(currentUser.username || "");
       setBio(currentUser.bio || "");
@@ -165,7 +166,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
             {/* Поле: Ім'я */}
             <View className="mb-4">
               <Text className="text-textMuted text-xs font-semibold uppercase mb-1.5">
-                Ім'я користувача *
+                {"Ім'я користувача *"}
               </Text>
               <TextInput
                 value={name}

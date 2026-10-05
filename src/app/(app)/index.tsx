@@ -17,7 +17,6 @@ import {
 export default function HomeScreen() {
   const router = useRouter();
   const rooms = useQuery(api.rooms.listRooms);
-  const user = useQuery(api.users.currentUser);
   const [refreshing, setRefreshing] = useState(false);
 
   const onRefresh = async () => {
