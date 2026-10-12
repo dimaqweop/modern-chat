@@ -9,14 +9,14 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
-import { File } from "expo-file-system";
-import * as ImagePicker from "expo-image-picker";
 import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
+import { File } from "expo-file-system";
+import * as ImagePicker from "expo-image-picker";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { fetch } from "expo/fetch";
 import { useRef, useState } from "react";
@@ -34,7 +34,7 @@ import {
 } from "react-native";
 
 // Кількість повідомлень в одній порції
-const MESSAGES_PAGE_SIZE = 25;
+const MESSAGES_PAGE_SIZE = 15;
 
 export default function ChatRoomScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
