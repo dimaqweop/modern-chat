@@ -37,10 +37,20 @@ export default defineSchema({
     storageId: v.optional(v.id("_storage")),
     isEdited: v.optional(v.boolean()),
 
-    // Нові поля для підтримки відповідей на повідомлення:
+    // Цитування повідомлень (з ДЗ 9)
     replyToId: v.optional(v.id("messages")),
     replyToSender: v.optional(v.string()),
     replyToText: v.optional(v.string()),
+
+    // 👈 Нові поля для голосових повідомлень:
+    audioUrl: v.optional(v.string()),
+    audioStorageId: v.optional(v.id("_storage")),
+    audioDuration: v.optional(v.number()), // тривалість у секундах
+
+    videoUrl: v.optional(v.string()),
+    videoStorageId: v.optional(v.id("_storage")),
+    videoDuration: v.optional(v.number()),
+    isVideoNote: v.optional(v.boolean()),
   }).index("by_chat_room", ["chatRoomId"]),
 
   typingIndicators: defineTable({
@@ -51,4 +61,13 @@ export default defineSchema({
   })
     .index("by_room", ["chatRoomId"])
     .index("by_user_and_room", ["userId", "chatRoomId"]),
+
+  messageReactions: defineTable({
+    messageId: v.id("messages"),
+    userId: v.id("users"),
+    emoji: v.string(), // наприклад "👍", "❤️", "🔥"
+    createdAt: v.number(),
+  })
+    .index("by_message", ["messageId"])
+    .index("by_message_and_user", ["messageId", "userId"]),
 });

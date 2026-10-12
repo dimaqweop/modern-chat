@@ -10,6 +10,9 @@ import Animated, {
     useSharedValue,
     withSpring,
 } from "react-native-reanimated";
+import { VoiceMessagePlayer } from "./VoiceMessagePlayer";
+import { ReactionBadges } from "./ReactionBadges";
+import { VideoNotePlayer } from "./VideoNotePlayer";
 
 export interface MessageItemData {
   _id: Id<"messages">;
@@ -18,6 +21,12 @@ export interface MessageItemData {
   senderPhoto?: string;
   content?: string;
   imageUrl?: string;
+  audioUrl?: string;
+  audioDuration?: number;
+  videoUrl?: string;
+  videoStorageId?: Id<"_storage">;
+  videoDuration?: number;
+  isVideoNote?: boolean;
   isEdited?: boolean;
   replyToId?: Id<"messages">;
   replyToSender?: string;
@@ -78,6 +87,8 @@ export const SwipeableMessageItem: React.FC<SwipeableMessageItemProps> = ({
     };
   });
 
+  const isVideoNote = Boolean(item.videoUrl && item.isVideoNote);
+
   return (
     <View className="relative justify-center my-1">
       {/* Прихована іконка відповіді зліва */}
@@ -97,8 +108,12 @@ export const SwipeableMessageItem: React.FC<SwipeableMessageItemProps> = ({
           <TouchableOpacity
             activeOpacity={0.9}
             onLongPress={onLongPress}
-            className={`max-w-[82%] rounded-2xl p-3 ${
-              isOwn ? "bg-primary rounded-br-xs" : "bg-secondary rounded-bl-xs"
+            className={`max-w-[82%] rounded-2xl ${
+              isVideoNote
+                ? "p-1 bg-surface/40"
+                : isOwn
+                ? "bg-primary rounded-br-xs p-3"
+                : "bg-secondary rounded-bl-xs p-3"
             }`}
           >
             {/* Автор повідомлення (клікабельний для переходу в профіль) */}
@@ -112,36 +127,66 @@ export const SwipeableMessageItem: React.FC<SwipeableMessageItemProps> = ({
               </TouchableOpacity>
             )}
 
-            {/* Блок цитованого повідомлення (Reply Box) */}
-            {item.replyToSender && (
-              <View className="mb-2 p-2 rounded-lg bg-surface/50 border-l-2 border-primary">
-                <Text className="text-primary font-semibold text-[11px]">
-                  {item.replyToSender}
-                </Text>
-                <Text className="text-white/70 text-xs mt-0.5" numberOfLines={2}>
-                  {item.replyToText || "📷 Фотографія"}
-                </Text>
-              </View>
-            )}
-
-            {/* Фотографія (якщо прикріплена) */}
-            {item.imageUrl && (
-              <TouchableOpacity
-                activeOpacity={0.9}
-                onPress={() => onImagePress?.(item.imageUrl!)}
-              >
-                <Image
-                  source={{ uri: item.imageUrl }}
-                  className="w-56 h-56 rounded-xl mb-1.5 bg-surface"
-                  resizeMode="cover"
+            {item.videoUrl && item.isVideoNote ? (
+              <View className="my-1 items-center justify-center p-1">
+                <VideoNotePlayer
+                  videoUrl={item.videoUrl}
+                  duration={item.videoDuration}
+                  size={210}
                 />
-              </TouchableOpacity>
-            )}
+              </View>
+            ) : (
+              <>
+                {/* Блок цитованого повідомлення (Reply Box) */}
+                {item.replyToSender && (
+                  <View className="mb-2 p-2 rounded-lg bg-surface/50 border-l-2 border-primary">
+                    <Text className="text-primary font-semibold text-[11px]">
+                      {item.replyToSender}
+                    </Text>
+                    <Text className="text-white/70 text-xs mt-0.5" numberOfLines={2}>
+                      {item.replyToText ||
+                        (item.imageUrl
+                          ? "📷 Фотографія"
+                          : item.audioUrl
+                          ? "🎤 Голосове повідомлення"
+                          : item.videoUrl
+                          ? "📹 Відеоповідомлення"
+                          : "")}
+                    </Text>
+                  </View>
+                )}
 
-            {/* Текст повідомлення */}
-            {item.content ? (
-              <Text className="text-white text-base leading-5">{item.content}</Text>
-            ) : null}
+                {/* Фотографія (якщо прикріплена) */}
+                {item.imageUrl && (
+                  <TouchableOpacity
+                    activeOpacity={0.9}
+                    onPress={() => onImagePress?.(item.imageUrl!)}
+                  >
+                    <Image
+                      source={{ uri: item.imageUrl }}
+                      className="w-56 h-56 rounded-xl mb-1.5 bg-surface"
+                      resizeMode="cover"
+                    />
+                  </TouchableOpacity>
+                )}
+
+                {/* Голосове повідомлення */}
+                {item.audioUrl && (
+                  <View className="my-1">
+                    <VoiceMessagePlayer
+                      audioUrl={item.audioUrl}
+                      duration={item.audioDuration}
+                      isMyMessage={isOwn}
+                    />
+                  </View>
+                )}
+
+                {/* Текст повідомлення */}
+                {item.content ? (
+                  <Text className="text-white text-base leading-5">{item.content}</Text>
+                ) : null}
+              </>
+            )}
 
             {/* Час та статус редагування */}
             <View className="flex-row items-center justify-end mt-1 gap-1">
@@ -158,6 +203,11 @@ export const SwipeableMessageItem: React.FC<SwipeableMessageItemProps> = ({
           </TouchableOpacity>
         </Animated.View>
       </GestureDetector>
+
+      {/* Бейджі реакцій під повідомленням */}
+      <View className={`px-1 mt-0.5 ${isOwn ? "items-end" : "items-start"}`}>
+        <ReactionBadges messageId={item._id} />
+      </View>
     </View>
   );
 };

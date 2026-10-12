@@ -8,7 +8,11 @@
     "scheme": "modernchat",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Додатку Modern Chat потрібен доступ до вашого мікрофона для запису та надсилання голосових повідомлень.",
+        "NSCameraUsageDescription": "Modern Chat потрібен доступ до камери для запису відеокружечків."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -17,7 +21,11 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "output": "static",
@@ -33,7 +41,20 @@
           "imageWidth": 76
         }
       ],
-      "expo-secure-store"
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Modern Chat потрібен доступ до камери для запису відеокружечків.",
+          "microphonePermission": "Modern Chat потрібен доступ до мікрофона для запису звуку у відеокружечках."
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Додатку Modern Chat потрібен доступ до вашого мікрофона для запису та надсилання голосових повідомлень."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

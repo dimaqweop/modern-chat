@@ -1,7 +1,61 @@
 // convex/messages.ts
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+
+/**
+ * Отримує повідомлення кімнати порціями (курсорна пагінація від найновіших до найстаріших)
+ */
+export const getPaginatedMessages = query({
+  args: {
+    chatRoomId: v.id("chatRooms"),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return {
+        page: [],
+        isDone: true,
+        continueCursor: "",
+      };
+    }
+
+    // 1. Завантажуємо порцію повідомлень за спаданням дати (спочатку найновіші)
+    const paginated = await ctx.db
+      .query("messages")
+      .withIndex("by_chat_room", (q) => q.eq("chatRoomId", args.chatRoomId))
+      .order("desc")
+      .paginate(args.paginationOpts);
+
+    if (paginated.page.length === 0) {
+      return paginated;
+    }
+
+    // 2. Збагачуємо інформацією про авторів ТІЛЬКИ поточну завантажену порцію!
+    const messagesWithSender = await Promise.all(
+      paginated.page.map(async (msg) => {
+        const sender = await ctx.db.get(msg.senderId);
+
+        return {
+          ...msg,
+          sender: {
+            _id: sender?._id,
+            name: sender?.name ?? (sender as any)?.fullname ?? "Користувач",
+            username: sender?.username,
+            image: sender?.image,
+          },
+        };
+      })
+    );
+
+    return {
+      ...paginated,
+      page: messagesWithSender,
+    };
+  },
+});
 
 /**
  * Отримання списку повідомлень у вказаній кімнаті в хронологічному порядку
@@ -59,6 +113,114 @@ export const sendMessage = mutation({
     // 2. Оновлюємо інформацію про останнє повідомлення в кімнаті
     await ctx.db.patch(args.chatRoomId, {
       lastMessage: `${user.name ?? "Користувач"}: ${trimmedContent}`,
+      lastMessageAt: Date.now(),
+    });
+
+    return messageId;
+  },
+});
+
+/**
+ * Мутація для відправки голосового повідомлення
+ */
+export const sendAudioMessage = mutation({
+  args: {
+    chatRoomId: v.id("chatRooms"),
+    audioStorageId: v.id("_storage"),
+    audioDuration: v.number(),
+    replyToId: v.optional(v.id("messages")),
+    replyToSender: v.optional(v.string()),
+    replyToText: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Необхідно авторизуватися");
+    }
+
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      throw new Error("Користувача не знайдено");
+    }
+
+    // Отримуємо публічне посилання на аудіофайл зі сховища
+    const audioUrl = await ctx.storage.getUrl(args.audioStorageId);
+    if (!audioUrl) {
+      throw new Error("Не вдалося отримати URL аудіофайлу");
+    }
+
+    const messageId = await ctx.db.insert("messages", {
+      chatRoomId: args.chatRoomId,
+      senderId: userId,
+      senderName: user.name ?? user.email?.split("@")[0] ?? "Користувач",
+      senderPhoto: user.image ?? undefined,
+      audioUrl,
+      audioStorageId: args.audioStorageId,
+      audioDuration: args.audioDuration,
+      replyToId: args.replyToId,
+      replyToSender: args.replyToSender,
+      replyToText: args.replyToText,
+    });
+
+    // Оновлюємо останнє повідомлення у кімнаті
+    await ctx.db.patch(args.chatRoomId, {
+      lastMessage: `${user.name ?? user.email?.split("@")[0] ?? "Користувач"}: 🎤 Голосове повідомлення`,
+      lastMessageAt: Date.now(),
+    });
+
+    return messageId;
+  },
+});
+
+/**
+ * Надсилає відеоповідомлення у кружечку в чат-кімнату
+ */
+export const sendVideoNoteMessage = mutation({
+  args: {
+    chatRoomId: v.id("chatRooms"),
+    videoStorageId: v.id("_storage"),
+    videoDuration: v.number(),
+    replyToId: v.optional(v.id("messages")),
+    replyToSender: v.optional(v.string()),
+    replyToText: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Необхідно авторизуватися");
+    }
+
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      throw new Error("Користувача не знайдено");
+    }
+
+    // Отримуємо публічний URL відео з Convex Storage
+    const videoUrl = await ctx.storage.getUrl(args.videoStorageId);
+    if (!videoUrl) {
+      throw new Error("Не вдалося отримати URL відеофайлу");
+    }
+
+    const senderName = user.name ?? user.email?.split("@")[0] ?? "Користувач";
+
+    // Зберігаємо повідомлення в базі
+    const messageId = await ctx.db.insert("messages", {
+      chatRoomId: args.chatRoomId,
+      senderId: userId,
+      senderName,
+      senderPhoto: user.image ?? undefined,
+      videoUrl,
+      videoStorageId: args.videoStorageId,
+      videoDuration: args.videoDuration,
+      isVideoNote: true,
+      replyToId: args.replyToId,
+      replyToSender: args.replyToSender,
+      replyToText: args.replyToText,
+    });
+
+    // Оновлюємо останнє повідомлення в кімнаті
+    await ctx.db.patch(args.chatRoomId, {
+      lastMessage: `${senderName}: 📹 Відеоповідомлення`,
       lastMessageAt: Date.now(),
     });
 
@@ -134,6 +296,12 @@ export const deleteMessage = mutation({
     if (message.storageId) {
       await ctx.storage.delete(message.storageId);
     }
+    if (message.audioStorageId) {
+      await ctx.storage.delete(message.audioStorageId);
+    }
+    if (message.videoStorageId) {
+      await ctx.storage.delete(message.videoStorageId);
+    }
 
     await ctx.db.delete(args.messageId);
 
@@ -157,13 +325,15 @@ export const deleteMessage = mutation({
 /**
  * Генерація тимчасового посилання для завантаження файлу в сховище
  */
+
 export const generateUploadUrl = mutation(async (ctx) => {
   const userId = await getAuthUserId(ctx);
   if (!userId) {
-    throw new Error("Unauthorized: Потрібна авторизація");
+    throw new Error("Необхідно авторизуватися");
   }
   return await ctx.storage.generateUploadUrl();
 });
+
 
 /**
  * Відправка повідомлення з медіафайлом (зображенням)
