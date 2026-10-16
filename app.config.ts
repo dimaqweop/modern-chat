@@ -1,7 +1,7 @@
 import { ConfigContext, ExpoConfig } from "expo/config";
 
 const APP_NAME = "ModernChat";
-const PACKAGE_NAME = "com.modernChat.app";
+const PACKAGE_NAME = "com.modernchat.app";
 const SCHEME = "modernChat";
 
 export default ({ config }: ConfigContext): ExpoConfig => {
@@ -37,6 +37,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
 
     android: {
       package: isDev ? `${PACKAGE_NAME}.dev` : PACKAGE_NAME,
+      googleServicesFile: "./google-services.json", // 👈 Файл конфігурації Firebase
       adaptiveIcon: {
         backgroundColor: "#E6F4FE",
         foregroundImage: "./assets/images/android-icon-foreground.png",
@@ -47,6 +48,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       permissions: [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
+        "android.permission.VIBRATE",             // 👈 Дозвіл вібрації для пушів
+        "android.permission.POST_NOTIFICATIONS",   // 👈 Системний дозвіл пушів Android 13+
       ],
     },
 
@@ -84,7 +87,23 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         },
       ],
       ["expo-video"],
+      // 👇 Плагін конфігурації системних сповіщень Expo
+      [
+        "expo-notifications",
+        {
+          icon: "./assets/images/icon.png",
+          color: "#2563EB",
+          defaultChannel: "default",
+        },
+      ],
     ],
+
+    extra: {
+      ...config.extra,
+      eas: {
+        projectId: "13a5c22e-aa58-4998-9f80-2eee72777c2c",
+      },
+    },
 
     experiments: {
       typedRoutes: true,

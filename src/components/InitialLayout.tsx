@@ -1,10 +1,15 @@
 // components/InitialLayout.tsx
-import { useConvexAuth } from "@convex-dev/auth/react";
-import { Stack, useRouter, useSegments } from "expo-router";
-import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
+import { useConvexAuth } from "@convex-dev/auth/react";
+import * as SplashScreen from "expo-splash-screen";
+import { Stack, useRouter, useSegments } from "expo-router";
+// 👇 ДОДАТИ ІМПОРТ ХУКА:
+import { usePushNotifications } from "@/hooks/usePushNotifications";
 
 export default function InitialLayout() {
+  // 👇 ДОДАТИ ВИКЛИК ХУКА:
+  usePushNotifications();
+
   const { isAuthenticated, isLoading } = useConvexAuth();
   const segments = useSegments();
   const router = useRouter();

@@ -15,6 +15,7 @@ export default defineSchema({
     username: v.optional(v.string()), // Унікальний нікнейм користувача (@username)
     bio: v.optional(v.string()),      // Статус або короткий опис профілю
     avatarStorageId: v.optional(v.id("_storage")),
+    pushToken: v.optional(v.string()),
   }).index("by_email", ["email"]),
 
   // Чат-кімнати

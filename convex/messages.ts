@@ -3,6 +3,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api"; // 👈 Додати імпорт внутрішнього API
+import { Id } from "./_generated/dataModel";
 
 /**
  * Отримує повідомлення кімнати порціями (курсорна пагінація від найновіших до найстаріших)
@@ -98,11 +100,11 @@ export const sendMessage = mutation({
       throw new Error("Message content cannot be empty");
     }
 
-    // 1. Зберігаємо повідомлення разом із даними цитування
+    // 1. Зберігаємо повідомлення в базі
     const messageId = await ctx.db.insert("messages", {
       chatRoomId: args.chatRoomId,
       senderId: userId,
-      senderName: user.name ?? user.email ?? "Користувач",
+      senderName: user.name ?? user.email ?? "Співрозмовник",
       senderPhoto: user.image,
       content: trimmedContent,
       replyToId: args.replyToId,
@@ -112,9 +114,84 @@ export const sendMessage = mutation({
 
     // 2. Оновлюємо інформацію про останнє повідомлення в кімнаті
     await ctx.db.patch(args.chatRoomId, {
-      lastMessage: `${user.name ?? "Користувач"}: ${trimmedContent}`,
+      lastMessage: trimmedContent,
       lastMessageAt: Date.now(),
     });
+
+    // 3. Відправка Push-сповіщень через фоновий планувальник
+    const room = await ctx.db.get(args.chatRoomId);
+    const senderName = user.name ?? user.email ?? "Співрозмовник";
+    const roomTitle = room?.title ?? "Чат";
+
+    let replyAuthorId: Id<"users"> | null = null;
+
+    // СЦЕНАРІЙ А: Якщо це відповідь на чиєсь повідомлення (Reply)
+    if (args.replyToId) {
+      const originalMessage = await ctx.db.get(args.replyToId);
+      if (originalMessage && originalMessage.senderId !== userId) {
+        replyAuthorId = originalMessage.senderId;
+        const originalAuthor = await ctx.db.get(originalMessage.senderId);
+
+        if (originalAuthor?.pushToken) {
+          await ctx.scheduler.runAfter(
+            0,
+            internal.pushNotifications.sendPushNotification,
+            {
+              pushToken: originalAuthor.pushToken,
+              title: `💬 Відповідь від ${senderName}`,
+              body: `${senderName} відповів(-ла) у "${roomTitle}": ${trimmedContent}`,
+              data: {
+                type: "reply",
+                roomId: args.chatRoomId,
+                messageId,
+              },
+            }
+          );
+        }
+      }
+    }
+
+    // СЦЕНАРІЙ Б: Відправка решті учасників кімнати
+    // Отримуємо повідомлення кімнати для визначення списку учасників
+    const recentMessages = await ctx.db
+      .query("messages")
+      .withIndex("by_chat_room", (q) => q.eq("chatRoomId", args.chatRoomId))
+      .collect();
+
+    const recipientIds = new Set<Id<"users">>();
+
+    // Додаємо творця кімнати, якщо це не автор повідомлення
+    if (room?.creatorId && room.creatorId !== userId && room.creatorId !== replyAuthorId) {
+      recipientIds.add(room.creatorId);
+    }
+
+    // Додаємо всіх, хто писав у цю кімнату раніше
+    for (const msg of recentMessages) {
+      if (msg.senderId !== userId && msg.senderId !== replyAuthorId) {
+        recipientIds.add(msg.senderId);
+      }
+    }
+
+    // Відправляємо пуші всім знайденим учасникам
+    for (const recipientId of recipientIds) {
+      const recipient = await ctx.db.get(recipientId);
+      if (recipient?.pushToken) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.pushNotifications.sendPushNotification,
+          {
+            pushToken: recipient.pushToken,
+            title: `${senderName} (${roomTitle})`,
+            body: trimmedContent,
+            data: {
+              type: "message",
+              roomId: args.chatRoomId,
+              messageId,
+            },
+          }
+        );
+      }
+    }
 
     return messageId;
   },
